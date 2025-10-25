@@ -5,248 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CPUタスク割り振りシミュレーター</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Arial', sans-serif;
             background: linear-gradient(135deg, #1e293b 0%, #581c87 50%, #1e293b 100%);
             min-height: 100vh;
-            padding: 20px;
-            color: white;
+            padding: 20px; color: white;
         }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 24px; }
+        .header h1 { font-size: 2rem; margin-bottom: 6px; }
+        .header p { color: #c084fc; }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-        }
-
-        .header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
-        }
-
-        .header p {
-            color: #c084fc;
-        }
-
-        .setup-panel {
+        .setup-panel, .stats-panel, .queue-panel {
             background: #1e293b;
-            border: 2px solid rgba(168, 85, 247, 0.3);
-            border-radius: 12px;
-            padding: 40px;
-            max-width: 600px;
-            margin: 0 auto;
-        }
-
-        .setup-panel h2 {
-            margin-bottom: 30px;
-            font-size: 1.8rem;
-        }
-
-        .input-group {
-            margin-bottom: 25px;
-        }
-
-        .input-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: bold;
-        }
-
-        .input-group input {
-            width: 100%;
-            padding: 12px;
-            font-size: 1.1rem;
-            background: #334155;
-            border: 1px solid rgba(168, 85, 247, 0.3);
-            border-radius: 6px;
-            color: white;
-        }
-
-        .input-group input:focus {
-            outline: none;
-            border-color: #a855f7;
-        }
-
-        .btn {
-            width: 100%;
-            padding: 15px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .btn-start {
-            background: linear-gradient(135deg, #16a34a, #059669);
-            color: white;
-        }
-
-        .btn-start:hover {
-            background: linear-gradient(135deg, #15803d, #047857);
-        }
-
-        .btn-reset {
-            background: #dc2626;
-            color: white;
-            padding: 10px 20px;
-            font-size: 1rem;
-            width: auto;
-            margin-top: 15px;
-        }
-
-        .btn-reset:hover {
-            background: #b91c1c;
-        }
-
-        .stats-panel {
-            background: #1e293b;
-            border: 2px solid rgba(168, 85, 247, 0.3);
-            border-radius: 12px;
-            padding: 25px;
-            margin-bottom: 25px;
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 20px;
-            margin-bottom: 15px;
-        }
-
-        .stat-item label {
-            display: block;
-            color: #c084fc;
-            font-size: 0.9rem;
-            margin-bottom: 5px;
-        }
-
-        .stat-item .value {
-            font-size: 1.8rem;
-            font-weight: bold;
-        }
-
-        .queue-panel {
-            background: #1e293b;
-            border: 2px solid rgba(168, 85, 247, 0.3);
+            border: 2px solid rgba(168,85,247,0.25);
             border-radius: 12px;
             padding: 20px;
-            margin-bottom: 25px;
         }
 
-        .queue-panel h3 {
-            margin-bottom: 15px;
+        .setup-panel { max-width: 700px; margin: 0 auto 20px; }
+        .input-group { margin-bottom: 14px; }
+        .input-group label { display:block; margin-bottom:6px; font-weight:bold; }
+        .input-group input, .input-group select {
+            width:100%; padding:10px; font-size:1rem; background:#334155; border:1px solid rgba(168,85,247,0.25);
+            border-radius:6px; color:white;
         }
+        .btn { cursor:pointer; border:none; border-radius:8px; padding:10px 14px; font-weight:bold; }
+        .btn-start { background: linear-gradient(135deg,#16a34a,#059669); color:white; }
+        .btn-reset { background:#dc2626; color:white; }
+        .btn-pause { background:#f59e0b; color:white; }
+        .btn-home { background:#3b82f6; color:white; }
 
-        .queue-container {
-            display: flex;
-            gap: 8px;
-            overflow-x: auto;
-            padding-bottom: 10px;
-        }
+        .stats-grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:12px; }
+        .stat-item label { color:#c084fc; font-size:0.85rem; margin-bottom:6px; display:block; }
+        .stat-item .value { font-size:1.4rem; font-weight:bold; }
 
-        .task-item {
-            background: #fbbf24;
-            color: #1e293b;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-weight: bold;
-            font-size: 0.8rem;
-            white-space: nowrap;
-            min-width: 60px;
-            text-align: center;
-        }
+        .queue-container { display:flex; gap:8px; overflow-x:auto; padding:10px 0; }
+        .task-item { background:#fbbf24; color:#1e293b; padding:6px 8px; border-radius:6px; font-weight:bold; font-size:0.8rem; white-space:nowrap; }
 
-        .cores-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-            gap: 10px;
-        }
+        .cores-grid { display:grid; grid-template-columns: repeat(auto-fill,minmax(100px,1fr)); gap:10px; margin-top:12px; }
+        .core-item { background:#111827; border-radius:8px; padding:8px; border:1px solid rgba(255,255,255,0.04); transition: box-shadow .2s, border-color .2s; }
+        .core-item.active-low { border-color:#10b981; box-shadow: 0 0 8px rgba(16,185,129,0.15); }
+        .core-item.active-mid { border-color:#f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.15); }
+        .core-item.active-high { border-color:#ef4444; box-shadow: 0 0 8px rgba(239,68,68,0.15); }
+        .core-header { font-weight:bold; margin-bottom:6px; font-size:0.85rem; color:#c7c7c7; }
+        .core-task { background:#7c3aed; border-radius:6px; padding:6px; font-size:0.78rem; color:white; }
+        .progress-bar { background:#334155; height:6px; border-radius:4px; margin-top:6px; overflow:hidden; }
+        .progress-fill { background:#10b981; height:100%; transition: width 0.08s linear; }
 
-        .core-item {
-            background: #1e293b;
-            border: 2px solid #10b981;
-            border-radius: 8px;
-            padding: 10px;
-            transition: all 0.3s;
-        }
+        .core-idle { color:#64748b; text-align:center; padding:8px; font-size:0.8rem; }
 
-        .core-item.active-low {
-            border-color: #10b981;
-            box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
-        }
+        .complete-message { background:#16a34a; border-radius:12px; padding:14px; text-align:center; font-weight:bold; color:white; margin-top:12px; }
+        .hidden { display:none; }
 
-        .core-item.active-mid {
-            border-color: #f59e0b;
-            box-shadow: 0 0 20px rgba(245, 158, 11, 0.5);
-        }
-
-        .core-item.active-high {
-            border-color: #ef4444;
-            box-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
-        }
-
-        .core-header {
-            font-weight: bold;
-            font-size: 0.8rem;
-            margin-bottom: 8px;
-        }
-
-        .core-task {
-            background: #7c3aed;
-            border-radius: 6px;
-            padding: 6px;
-            font-size: 0.75rem;
-        }
-
-        .core-task .task-name {
-            font-weight: bold;
-            margin-bottom: 4px;
-        }
-
-        .progress-bar {
-            background: #334155;
-            border-radius: 4px;
-            height: 4px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            background: #10b981;
-            height: 100%;
-            transition: width 0.1s linear;
-        }
-
-        .core-idle {
-            color: #64748b;
-            text-align: center;
-            padding: 6px;
-            font-size: 0.75rem;
-        }
-
-        .complete-message {
-            background: #16a34a;
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-            font-weight: bold;
-            font-size: 1.2rem;
-            margin-top: 25px;
-        }
-
-        .hidden {
-            display: none;
+        @media (max-width:600px) {
+            .header h1 { font-size:1.6rem; }
+            .cores-grid { grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); }
         }
     </style>
 </head>
@@ -257,58 +72,69 @@
             <p>パラメータを設定してシミュレーションを開始しよう</p>
         </div>
 
-        <!-- 設定画面 -->
         <div id="setupScreen" class="setup-panel">
             <h2>シミュレーション設定</h2>
-            
+
             <div class="input-group">
-                <label>🖥️ コア数</label>
-                <input type="number" id="coresInput" value="16" min="1" max="128">
+                <label for="coresInput">🖥️ コア数</label>
+                <input id="coresInput" type="number" value="16" min="1" max="128">
             </div>
 
             <div class="input-group">
-                <label>⚡ クロック速度 (MHz)</label>
-                <input type="number" id="clockInput" value="1000" min="100" max="10000" step="100">
+                <label for="clockInput">⚡ クロック速度 (MHz)</label>
+                <input id="clockInput" type="number" value="1000" min="100" max="10000" step="100">
             </div>
 
             <div class="input-group">
-                <label>📋 総タスク数</label>
-                <input type="number" id="tasksInput" value="1000" min="10" max="100000" step="100">
+                <label for="tasksInput">📋 総タスク数</label>
+                <input id="tasksInput" type="number" value="1000" min="1" max="200000" step="1">
             </div>
 
-            <button class="btn btn-start" onclick="startSimulation()">▶️ シミュレーション開始</button>
+            <div class="input-group">
+                <label for="algoSelect">🔀 スケジューリングアルゴリズム</label>
+                <select id="algoSelect">
+                    <option value="fcfs">FCFS（先着順）</option>
+                    <option value="sjf">SJF（最短ジョブ優先）</option>
+                </select>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-top:8px;">
+                <button id="startBtn" class="btn btn-start">▶️ シミュレーション開始</button>
+                <button id="resetBtn" class="btn btn-reset">🔄 リセット</button>
+            </div>
         </div>
 
-        <!-- シミュレーション画面 -->
         <div id="simScreen" class="hidden">
-            <div class="stats-panel">
+            <div class="stats-panel" aria-live="polite" id="statsPanel">
                 <div class="stats-grid">
                     <div class="stat-item">
-                        <label>コア数</label>
-                        <div class="value" id="statCores">0</div>
+                        <label>コア数</label><div class="value" id="statCores">0</div>
                     </div>
                     <div class="stat-item">
-                        <label>クロック速度</label>
-                        <div class="value" id="statClock">0 MHz</div>
+                        <label>クロック速度</label><div class="value" id="statClock">0 MHz</div>
                     </div>
                     <div class="stat-item">
-                        <label>処理済み</label>
-                        <div class="value" style="color: #10b981" id="statProcessed">0</div>
+                        <label>処理済み</label><div class="value" id="statProcessed" style="color:#10b981">0</div>
                     </div>
                     <div class="stat-item">
-                        <label>残りタスク</label>
-                        <div class="value" style="color: #fbbf24" id="statRemaining">0</div>
+                        <label>残り（キュー + 実行中）</label><div class="value" id="statRemaining" style="color:#fbbf24">0</div>
                     </div>
                 </div>
-                <button class="btn btn-reset" onclick="resetSimulation()">🔄 リセット</button>
+
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button id="pauseBtn" class="btn btn-pause">⏸️ 一時停止</button>
+                    <button id="homeBtn" class="btn btn-home">🏠 ホームに戻る</button>
+                    <div style="flex:1"></div>
+                    <div style="font-size:0.85rem; color:#c084fc">アルゴリズム: <span id="statAlgo">FCFS</span></div>
+                </div>
             </div>
 
-            <div class="queue-panel">
+            <div class="queue-panel" style="margin-top:12px;">
                 <h3>📋 タスクキュー (<span id="queueCount">0</span>)</h3>
-                <div class="queue-container" id="queueContainer"></div>
+                <div class="queue-container" id="queueContainer" aria-live="polite"></div>
             </div>
 
-            <div class="cores-grid" id="coresContainer"></div>
+            <div class="cores-grid" id="coresContainer" style="margin-top:12px;"></div>
 
             <div id="completeMessage" class="complete-message hidden">
                 🎉 全タスク完了！処理済み: <span id="finalCount">0</span>
@@ -317,196 +143,293 @@
     </div>
 
     <script>
+        // シミュレーション状態
         let isRunning = false;
+        let isPaused = false;
         let cores = 16;
-        let clockSpeed = 1000;
+        let clockSpeed = 1000; // MHz
         let totalTasks = 1000;
+        let algorithm = 'fcfs';
         let taskQueue = [];
         let coreStates = [];
         let tasksProcessed = 0;
         let taskIdCounter = 0;
-        let animationId = null;
+        let rafId = null;
+        let lastTimestamp = 0;
+
+        // DOM
+        const setupScreen = document.getElementById('setupScreen');
+        const simScreen = document.getElementById('simScreen');
+        const startBtn = document.getElementById('startBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const homeBtn = document.getElementById('homeBtn');
+        const algoSelect = document.getElementById('algoSelect');
+        const statAlgo = document.getElementById('statAlgo');
+
+        startBtn.addEventListener('click', startSimulation);
+        resetBtn.addEventListener('click', resetSimulation);
+        pauseBtn.addEventListener('click', togglePause);
+        homeBtn.addEventListener('click', backToHome);
+        algoSelect.addEventListener('change', () => { algorithm = algoSelect.value; statAlgo.textContent = algorithm.toUpperCase(); });
 
         function startSimulation() {
-            cores = parseInt(document.getElementById('coresInput').value) || 16;
-            clockSpeed = parseInt(document.getElementById('clockInput').value) || 1000;
-            totalTasks = parseInt(document.getElementById('tasksInput').value) || 1000;
+            // 入力値取得
+            cores = Math.max(1, parseInt(document.getElementById('coresInput').value) || 16);
+            clockSpeed = Math.max(1, parseInt(document.getElementById('clockInput').value) || 1000);
+            totalTasks = Math.max(1, parseInt(document.getElementById('tasksInput').value) || 1000);
+            algorithm = algoSelect.value || 'fcfs';
+            statAlgo.textContent = algorithm.toUpperCase();
 
-            // コアの初期化
+            // 初期化
+            taskQueue = [];
             coreStates = [];
+            tasksProcessed = 0;
+            taskIdCounter = 0;
+            isRunning = true;
+            isPaused = false;
+            lastTimestamp = 0;
+
+            // コア初期化
             for (let i = 0; i < cores; i++) {
                 coreStates.push({
                     id: i,
                     currentTask: null,
-                    progress: 0,
+                    timeSpentMs: 0,
                     load: 0
                 });
             }
 
-            // タスクの生成（weight を追加：重いほど処理に時間がかかる）
-            taskQueue = [];
-            taskIdCounter = 0;
+            // タスク生成
+            // duration は基準 ms（ランダム）。weight は 0.5〜2.0（重いほど遅くなる）
             for (let i = 0; i < totalTasks; i++) {
                 taskQueue.push({
                     id: taskIdCounter++,
-                    duration: Math.random() * 2000 + 1000,
-                    size: Math.floor(Math.random() * 100) + 20,
-                    // weight: 0.5 (軽い) 〜 2.0 (重い) のランダム（調整しやすい）
+                    duration: Math.random() * 2000 + 500, // ms
+                    size: Math.floor(Math.random() * 80) + 20, // 表示幅
                     weight: Math.random() * 1.5 + 0.5
                 });
             }
 
-            tasksProcessed = 0;
-            isRunning = true;
-
-            // 画面切り替え
-            document.getElementById('setupScreen').classList.add('hidden');
-            document.getElementById('simScreen').classList.remove('hidden');
+            // UI 切り替え
+            setupScreen.classList.add('hidden');
+            simScreen.classList.remove('hidden');
             document.getElementById('completeMessage').classList.add('hidden');
 
-            // 統計更新
             updateStats();
-            renderCores();
             renderQueue();
+            renderCores();
 
-            // アニメーション開始
-            animate();
+            // RAF 開始
+            rafId = requestAnimationFrame(loop);
         }
 
         function resetSimulation() {
             isRunning = false;
-            if (animationId) {
-                cancelAnimationFrame(animationId);
-                animationId = null;
-            }
-            
-            document.getElementById('setupScreen').classList.remove('hidden');
-            document.getElementById('simScreen').classList.add('hidden');
-            
+            isPaused = false;
+            if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
             taskQueue = [];
             coreStates = [];
             tasksProcessed = 0;
             taskIdCounter = 0;
+            lastTimestamp = 0;
+            setupScreen.classList.remove('hidden');
+            simScreen.classList.add('hidden');
+            document.getElementById('completeMessage').classList.add('hidden');
+            pauseBtn.textContent = '⏸️ 一時停止';
         }
 
-        function animate() {
+        // ホームに戻る（設定は保持）
+        function backToHome() {
+            // シミュレーションを停止する（状態は保持する）
+            if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+            isRunning = false;
+            isPaused = false;
+            lastTimestamp = 0;
+            // UI 切り替え（入力フォームの値はそのまま）
+            setupScreen.classList.remove('hidden');
+            simScreen.classList.add('hidden');
+            // 一時停止ボタン表示を初期に戻す
+            pauseBtn.textContent = '⏸️ 一時停止';
+            // 完了メッセージは非表示
+            document.getElementById('completeMessage').classList.add('hidden');
+        }
+
+        function togglePause() {
             if (!isRunning) return;
+            isPaused = !isPaused;
+            pauseBtn.textContent = isPaused ? '▶️ 再開' : '⏸️ 一時停止';
+            if (!isPaused && rafId === null) {
+                lastTimestamp = 0;
+                rafId = requestAnimationFrame(loop);
+                isRunning = true;
+            }
+        }
 
-            // タスク処理
-            let tasksCompleted = 0;
+        function dequeueTask() {
+            if (taskQueue.length === 0) return null;
+            if (algorithm === 'fcfs') {
+                return taskQueue.shift();
+            } else if (algorithm === 'sjf') {
+                let idx = 0;
+                let best = taskQueue[0];
+                let bestCost = best.duration * best.weight;
+                for (let i = 1; i < taskQueue.length; i++) {
+                    const t = taskQueue[i];
+                    const cost = t.duration * t.weight;
+                    if (cost < bestCost) { bestCost = cost; idx = i; }
+                }
+                return taskQueue.splice(idx, 1)[0];
+            } else {
+                return taskQueue.shift();
+            }
+        }
 
-            // ベースの進行量（以前の実装に合わせた値）
-            const baseIncrement = clockSpeed / 200;
+        function loop(timestamp) {
+            if (!isRunning) { rafId = null; return; }
+            if (isPaused) { rafId = null; return; }
+
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const delta = timestamp - lastTimestamp; // ms
+            lastTimestamp = timestamp;
+
+            let tasksCompletedThisFrame = 0;
 
             coreStates.forEach(core => {
                 if (core.currentTask) {
-                    // core に割り当てられた進行量を使う（なければベース）
-                    const inc = (typeof core.progressIncrement === 'number') ? core.progressIncrement : baseIncrement;
-                    core.progress += inc;
+                    core.timeSpentMs += delta;
+                    const speedFactor = Math.max(0.001, clockSpeed / 1000);
+                    const effectiveDuration = core.currentTask.duration * core.currentTask.weight / speedFactor;
+                    const progress = Math.min(100, (core.timeSpentMs / effectiveDuration) * 100);
+                    core.progress = progress;
+                    core.load = Math.min(100, 30 + progress * 0.7);
 
-                    if (core.progress >= 100) {
-                        // タスク完了
-                        tasksCompleted++;
+                    if (core.timeSpentMs >= effectiveDuration) {
+                        tasksCompletedThisFrame++;
                         core.currentTask = null;
+                        core.timeSpentMs = 0;
                         core.progress = 0;
                         core.load = 0;
-                        core.progressIncrement = undefined;
-                    } else {
-                        core.load = Math.min(100, 50 + (core.progress / 2));
                     }
-                }
-
-                // 新しいタスクを割り振り
-                if (!core.currentTask && taskQueue.length > 0) {
-                    const task = taskQueue.shift();
-                    core.currentTask = task;
-                    core.progress = 0;
-                    core.load = 50;
-                    // 重い task.weight のときは進行が遅くなる（baseIncrement ÷ weight）
-                    core.progressIncrement = baseIncrement / task.weight;
                 }
             });
 
-            if (tasksCompleted > 0) {
-                tasksProcessed += tasksCompleted;
-            }
+            coreStates.forEach(core => {
+                if (!core.currentTask && taskQueue.length > 0) {
+                    const t = dequeueTask();
+                    if (t) {
+                        core.currentTask = t;
+                        core.timeSpentMs = 0;
+                        core.progress = 0;
+                        core.load = 30;
+                    }
+                }
+            });
 
-            // 全タスク完了チェック
-            const allIdle = coreStates.every(c => !c.currentTask);
-            if (taskQueue.length === 0 && allIdle) {
+            if (tasksCompletedThisFrame > 0) tasksProcessed += tasksCompletedThisFrame;
+
+            const anyBusy = coreStates.some(c => c.currentTask);
+            if (taskQueue.length === 0 && !anyBusy) {
                 isRunning = false;
                 document.getElementById('completeMessage').classList.remove('hidden');
                 document.getElementById('finalCount').textContent = tasksProcessed;
             }
 
-            // UI更新
             updateStats();
-            renderCores();
             renderQueue();
+            renderCores();
 
-            // 次のフレーム
-            if (isRunning) {
-                animationId = requestAnimationFrame(animate);
-            }
+            rafId = isRunning ? requestAnimationFrame(loop) : null;
         }
 
         function updateStats() {
             document.getElementById('statCores').textContent = cores;
             document.getElementById('statClock').textContent = clockSpeed + ' MHz';
             document.getElementById('statProcessed').textContent = tasksProcessed;
-            document.getElementById('statRemaining').textContent = totalTasks - tasksProcessed;
+            const runningCount = coreStates.filter(c => c.currentTask).length;
+            const remaining = taskQueue.length + runningCount;
+            document.getElementById('statRemaining').textContent = remaining;
+            document.getElementById('queueCount').textContent = taskQueue.length;
         }
 
         function renderQueue() {
             const container = document.getElementById('queueContainer');
-            const count = document.getElementById('queueCount');
-            count.textContent = taskQueue.length;
-
-            const displayTasks = taskQueue.slice(0, 30);
-            let html = '';
-            
-            displayTasks.forEach(task => {
-                // tooltip に weight 表示（確認用）
-                html += `<div class="task-item" style="min-width: ${task.size}px" title="weight: ${task.weight.toFixed(2)}">T${task.id}</div>`;
+            const toShow = taskQueue.slice(0, 40);
+            const frag = document.createDocumentFragment();
+            toShow.forEach(task => {
+                const div = document.createElement('div');
+                div.className = 'task-item';
+                div.style.minWidth = (Math.max(24, task.size) + 'px');
+                div.textContent = `T${task.id}`;
+                div.title = `w:${task.weight.toFixed(2)} dur:${Math.round(task.duration)}ms`;
+                frag.appendChild(div);
             });
-
-            if (taskQueue.length > 30) {
-                html += `<div style="color: #c084fc; padding: 8px; font-size: 0.8rem">+${taskQueue.length - 30} more</div>`;
+            if (taskQueue.length > 40) {
+                const more = document.createElement('div');
+                more.style.color = '#c084fc';
+                more.style.padding = '8px';
+                more.style.fontSize = '0.8rem';
+                more.textContent = `+${taskQueue.length - 40} more`;
+                frag.appendChild(more);
             }
-
-            container.innerHTML = html;
+            container.innerHTML = '';
+            container.appendChild(frag);
         }
 
         function renderCores() {
             const container = document.getElementById('coresContainer');
-            let html = '';
+            container.innerHTML = '';
+            const frag = document.createDocumentFragment();
 
             coreStates.forEach(core => {
-                let className = 'core-item';
-                if (core.load > 70) className += ' active-high';
-                else if (core.load > 40) className += ' active-mid';
-                else if (core.load > 0) className += ' active-low';
+                const div = document.createElement('div');
+                let cls = 'core-item';
+                if (core.load > 70) cls += ' active-high';
+                else if (core.load > 40) cls += ' active-mid';
+                else if (core.load > 0) cls += ' active-low';
+                div.className = cls;
 
-                html += `<div class="${className}">`;
-                html += `<div class="core-header">C${core.id}</div>`;
+                const header = document.createElement('div');
+                header.className = 'core-header';
+                header.textContent = `C${core.id}`;
+                div.appendChild(header);
 
                 if (core.currentTask) {
-                    html += `<div class="core-task">`;
-                    html += `<div class="task-name">T${core.currentTask.id}</div>`;
-                    html += `<div class="progress-bar">`;
-                    html += `<div class="progress-fill" style="width: ${core.progress}%"></div>`;
-                    html += `</div>`;
-                    // 小さく weight を見せる（任意）
-                    html += `<div style="font-size:0.7rem; margin-top:6px; color:#c084fc">w:${core.currentTask.weight.toFixed(2)}</div>`;
-                    html += `</div>`;
+                    const taskBox = document.createElement('div');
+                    taskBox.className = 'core-task';
+
+                    const name = document.createElement('div');
+                    name.style.fontWeight = 'bold';
+                    name.textContent = `T${core.currentTask.id}`;
+                    taskBox.appendChild(name);
+
+                    const barWrap = document.createElement('div');
+                    barWrap.className = 'progress-bar';
+                    const fill = document.createElement('div');
+                    fill.className = 'progress-fill';
+                    fill.style.width = (core.progress || 0) + '%';
+                    barWrap.appendChild(fill);
+                    taskBox.appendChild(barWrap);
+
+                    const info = document.createElement('div');
+                    info.style.fontSize = '0.72rem';
+                    info.style.marginTop = '6px';
+                    info.style.color = '#c084fc';
+                    info.textContent = `w:${core.currentTask.weight.toFixed(2)} dur:${Math.round(core.currentTask.duration)}ms`;
+                    taskBox.appendChild(info);
+
+                    div.appendChild(taskBox);
                 } else {
-                    html += `<div class="core-idle">待機</div>`;
+                    const idle = document.createElement('div');
+                    idle.className = 'core-idle';
+                    idle.textContent = '待機';
+                    div.appendChild(idle);
                 }
 
-                html += `</div>`;
+                frag.appendChild(div);
             });
 
-            container.innerHTML = html;
+            container.appendChild(frag);
         }
     </script>
 </body>
