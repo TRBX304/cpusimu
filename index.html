@@ -59,9 +59,17 @@
         .complete-message { background:#16a34a; border-radius:12px; padding:14px; text-align:center; font-weight:bold; color:white; margin-top:12px; }
         .hidden { display:none; }
 
+        /* スマホ表示調整: 横に4列表示する */
         @media (max-width:600px) {
             .header h1 { font-size:1.6rem; }
-            .cores-grid { grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); }
+            /* ここで小さな画面でも常に4カラムにする */
+            .cores-grid { grid-template-columns: repeat(4, 1fr); gap:8px; }
+            /* 各コアの余白や文字サイズを少し縮めて詰める */
+            .core-item { padding:6px; }
+            .core-header { font-size:0.75rem; margin-bottom:4px; }
+            .core-task { padding:5px; font-size:0.72rem; }
+            .progress-bar { height:5px; }
+            .task-item { padding:4px 6px; font-size:0.75rem; }
         }
     </style>
 </head>
