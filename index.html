@@ -343,14 +343,16 @@
                 });
             }
 
-            // タスクの生成
+            // タスクの生成（weight を追加：重いほど処理に時間がかかる）
             taskQueue = [];
             taskIdCounter = 0;
             for (let i = 0; i < totalTasks; i++) {
                 taskQueue.push({
                     id: taskIdCounter++,
                     duration: Math.random() * 2000 + 1000,
-                    size: Math.floor(Math.random() * 100) + 20
+                    size: Math.floor(Math.random() * 100) + 20,
+                    // weight: 0.5 (軽い) 〜 2.0 (重い) のランダム（調整しやすい）
+                    weight: Math.random() * 1.5 + 0.5
                 });
             }
 
@@ -393,11 +395,14 @@
             // タスク処理
             let tasksCompleted = 0;
 
+            // ベースの進行量（以前の実装に合わせた値）
+            const baseIncrement = clockSpeed / 200;
+
             coreStates.forEach(core => {
                 if (core.currentTask) {
-                    // タスク進行
-                    const progressIncrement = clockSpeed / 200;
-                    core.progress += progressIncrement;
+                    // core に割り当てられた進行量を使う（なければベース）
+                    const inc = (typeof core.progressIncrement === 'number') ? core.progressIncrement : baseIncrement;
+                    core.progress += inc;
 
                     if (core.progress >= 100) {
                         // タスク完了
@@ -405,6 +410,7 @@
                         core.currentTask = null;
                         core.progress = 0;
                         core.load = 0;
+                        core.progressIncrement = undefined;
                     } else {
                         core.load = Math.min(100, 50 + (core.progress / 2));
                     }
@@ -412,9 +418,12 @@
 
                 // 新しいタスクを割り振り
                 if (!core.currentTask && taskQueue.length > 0) {
-                    core.currentTask = taskQueue.shift();
+                    const task = taskQueue.shift();
+                    core.currentTask = task;
                     core.progress = 0;
                     core.load = 50;
+                    // 重い task.weight のときは進行が遅くなる（baseIncrement ÷ weight）
+                    core.progressIncrement = baseIncrement / task.weight;
                 }
             });
 
@@ -457,7 +466,8 @@
             let html = '';
             
             displayTasks.forEach(task => {
-                html += `<div class="task-item" style="min-width: ${task.size}px">T${task.id}</div>`;
+                // tooltip に weight 表示（確認用）
+                html += `<div class="task-item" style="min-width: ${task.size}px" title="weight: ${task.weight.toFixed(2)}">T${task.id}</div>`;
             });
 
             if (taskQueue.length > 30) {
@@ -485,7 +495,10 @@
                     html += `<div class="task-name">T${core.currentTask.id}</div>`;
                     html += `<div class="progress-bar">`;
                     html += `<div class="progress-fill" style="width: ${core.progress}%"></div>`;
-                    html += `</div></div>`;
+                    html += `</div>`;
+                    // 小さく weight を見せる（任意）
+                    html += `<div style="font-size:0.7rem; margin-top:6px; color:#c084fc">w:${core.currentTask.weight.toFixed(2)}</div>`;
+                    html += `</div>`;
                 } else {
                     html += `<div class="core-idle">待機</div>`;
                 }
