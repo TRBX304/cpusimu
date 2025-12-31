@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CPUタスク割り振りシミュレーター</title>
+    <title>並列CPUスケジューラ（SharedArrayBuffer版）</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -59,7 +59,11 @@
         .complete-message { background:#16a34a; border-radius:12px; padding:14px; text-align:center; font-weight:bold; color:white; margin-top:12px; }
         .hidden { display:none; }
 
-        /* スマホ表示調整: 横に4列表示する */
+        .perf-info { background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; margin-top: 12px; font-size: 0.85rem; }
+        .perf-info span { color: #c084fc; }
+
+        .warning-box { background: #7c2d12; border: 1px solid #ea580c; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 0.9rem; }
+
         @media (max-width:600px) {
             .header h1 { font-size:1.6rem; }
             .cores-grid { grid-template-columns: repeat(4, 1fr); gap:8px; }
@@ -74,16 +78,21 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>⚙️ CPUタスク割り振りシミュレーター</h1>
-            <p>パラメータを設定してシミュレーションを開始しよう</p>
+            <h1>⚙️ 並列CPUスケジューラ</h1>
+            <p>SharedArrayBuffer + Multi-Worker 実験</p>
         </div>
 
         <div id="setupScreen" class="setup-panel">
+            <div class="warning-box">
+                ⚠️ この実験には SharedArrayBuffer が必要です。<br>
+                COOP/COEP ヘッダーが設定されたサーバーで実行してください。
+            </div>
+
             <h2>シミュレーション設定</h2>
 
             <div class="input-group">
-                <label for="coresInput">🖥️ コア数</label>
-                <input id="coresInput" type="number" value="16" min="1" max="10000">
+                <label for="coresInput">🖥️ コア数（最大10,000）</label>
+                <input id="coresInput" type="number" value="1000" min="1" max="10000">
             </div>
 
             <div class="input-group">
@@ -92,8 +101,8 @@
             </div>
 
             <div class="input-group">
-                <label for="tasksInput">📋 総タスク数</label>
-                <input id="tasksInput" type="number" value="1000" min="1" max="200000" step="1">
+                <label for="tasksInput">📋 総タスク数（最大500,000）</label>
+                <input id="tasksInput" type="number" value="50000" min="1" max="500000" step="1000">
             </div>
 
             <div class="input-group">
@@ -104,14 +113,21 @@
                 </select>
             </div>
 
+            <div class="input-group">
+                <label for="workersInput">🔧 Core Worker数（1-8）</label>
+                <input id="workersInput" type="number" value="4" min="1" max="8">
+            </div>
+
             <div style="display:flex; gap:8px; margin-top:8px;">
                 <button id="startBtn" class="btn btn-start">▶️ シミュレーション開始</button>
                 <button id="resetBtn" class="btn btn-reset">🔄 リセット</button>
             </div>
+
+            <div id="sabStatus" style="margin-top: 12px; padding: 10px; border-radius: 6px;"></div>
         </div>
 
         <div id="simScreen" class="hidden">
-            <div class="stats-panel" aria-live="polite" id="statsPanel">
+            <div class="stats-panel" id="statsPanel">
                 <div class="stats-grid">
                     <div class="stat-item">
                         <label>コア数</label><div class="value" id="statCores">0</div>
@@ -123,7 +139,7 @@
                         <label>処理済み</label><div class="value" id="statProcessed" style="color:#10b981">0</div>
                     </div>
                     <div class="stat-item">
-                        <label>残り（キュー + 実行中）</label><div class="value" id="statRemaining" style="color:#fbbf24">0</div>
+                        <label>残り</label><div class="value" id="statRemaining" style="color:#fbbf24">0</div>
                     </div>
                 </div>
 
@@ -133,11 +149,18 @@
                     <div style="flex:1"></div>
                     <div style="font-size:0.85rem; color:#c084fc">アルゴリズム: <span id="statAlgo">FCFS</span></div>
                 </div>
+
+                <div class="perf-info">
+                    <span>Tick:</span> <span id="perfTick">0</span> | 
+                    <span>TPS:</span> <span id="perfTps">0</span> | 
+                    <span>Workers:</span> <span id="perfWorkers">0</span> |
+                    <span>SAB Size:</span> <span id="perfSab">0</span> KB
+                </div>
             </div>
 
             <div class="queue-panel" style="margin-top:12px;">
                 <h3>📋 タスクキュー (<span id="queueCount">0</span>)</h3>
-                <div class="queue-container" id="queueContainer" aria-live="polite"></div>
+                <div class="queue-container" id="queueContainer"></div>
             </div>
 
             <div class="cores-grid" id="coresContainer" style="margin-top:12px;"></div>
@@ -149,381 +172,587 @@
     </div>
 
     <!-- =========================================================
-         Web Worker コード（Blob URL で生成）
-         計算処理のみを担当し、DOM操作は一切行わない
+         Scheduler Worker
+         - タスクキュー管理（FCFS/SJF）
+         - 空きコアへのタスク割当
+         - グローバル状態管理
     ========================================================= -->
-    <script id="worker-code" type="text/js-worker">
+    <script id="scheduler-worker" type="text/js-worker">
     'use strict';
 
-    // =========================================================
-    // Min-Heap 実装 - SJF の O(N) 探索を O(log N) に
-    // =========================================================
-    class MinHeap {
-        constructor(compareFn) {
-            this._heap = [];
-            this._compare = compareFn || ((a, b) => a - b);
-        }
+    /*
+    ============================================================
+    SharedArrayBuffer メモリレイアウト
+    ============================================================
+    
+    【グローバル制御領域】 (GLOBAL_OFFSET = 0, 64 bytes)
+    ┌─────────────────────────────────────────────────────────┐
+    │ [0] tickCount      : 現在のtick番号                      │
+    │ [1] isRunning      : 実行中フラグ (0/1)                  │
+    │ [2] isPaused       : 一時停止フラグ (0/1)                │
+    │ [3] tasksProcessed : 処理完了タスク数                    │
+    │ [4] queueHead      : キュー先頭インデックス              │
+    │ [5] queueTail      : キュー末尾インデックス              │
+    │ [6] clockSpeed     : クロック速度 (MHz)                  │
+    │ [7] algorithm      : アルゴリズム (0=FCFS, 1=SJF)        │
+    │ [8] coreCount      : コア数                              │
+    │ [9] totalTasks     : 総タスク数                          │
+    │ [10] schedulerReady: スケジューラ準備完了フラグ          │
+    │ [11-15] reserved                                        │
+    └─────────────────────────────────────────────────────────┘
+    
+    【コア状態領域】 (CORE_OFFSET = 64, CORE_STRIDE = 32 bytes/core)
+    各コアは8つのInt32スロットを持つ:
+    ┌─────────────────────────────────────────────────────────┐
+    │ [+0] taskId        : 実行中タスクID (-1 = idle)          │
+    │ [+1] timeSpentMs   : 経過時間 (ms, fixed-point x1000)    │
+    │ [+2] progress      : 進捗 (0-100)                        │
+    │ [+3] load          : 負荷 (0-100)                        │
+    │ [+4] taskDuration  : タスク基準時間 (ms x1000)           │
+    │ [+5] taskWeight    : タスク重み (x1000)                  │
+    │ [+6] completed     : このtickで完了したフラグ (0/1)      │
+    │ [+7] reserved                                           │
+    └─────────────────────────────────────────────────────────┘
+    
+    【タスクキュー領域】 (QUEUE_OFFSET = 64 + cores*32)
+    各タスクは4つのInt32スロットを持つ (TASK_STRIDE = 16 bytes):
+    ┌─────────────────────────────────────────────────────────┐
+    │ [+0] id            : タスクID                            │
+    │ [+1] duration      : 基準時間 (ms x1000)                 │
+    │ [+2] weight        : 重み (x1000)                        │
+    │ [+3] size          : 表示サイズ                          │
+    └─────────────────────────────────────────────────────────┘
+    
+    【設計理由】
+    - 連続メモリ配置でキャッシュ効率最大化
+    - 固定小数点で浮動小数点演算を回避（Int32のみ）
+    - 各Workerが担当範囲のみアクセスし競合を最小化
+    - ストライドを2の累乗に近づけアライメント最適化
+    */
 
-        get size() { return this._heap.length; }
+    // メモリレイアウト定数
+    const GLOBAL_OFFSET = 0;
+    const GLOBAL_SIZE = 16;  // 16 x Int32 = 64 bytes
+    const CORE_STRIDE = 8;   // 8 x Int32 = 32 bytes per core
+    const TASK_STRIDE = 4;   // 4 x Int32 = 16 bytes per task
 
-        peek() { return this._heap[0] || null; }
+    // グローバル制御インデックス
+    const G_TICK = 0;
+    const G_RUNNING = 1;
+    const G_PAUSED = 2;
+    const G_PROCESSED = 3;
+    const G_QUEUE_HEAD = 4;
+    const G_QUEUE_TAIL = 5;
+    const G_CLOCK = 6;
+    const G_ALGO = 7;
+    const G_CORE_COUNT = 8;
+    const G_TOTAL_TASKS = 9;
+    const G_SCHEDULER_READY = 10;
 
-        push(val) {
-            this._heap.push(val);
-            this._siftUp(this._heap.length - 1);
-        }
+    // コア状態オフセット
+    const C_TASK_ID = 0;
+    const C_TIME_SPENT = 1;
+    const C_PROGRESS = 2;
+    const C_LOAD = 3;
+    const C_TASK_DURATION = 4;
+    const C_TASK_WEIGHT = 5;
+    const C_COMPLETED = 6;
 
-        pop() {
-            if (this._heap.length === 0) return null;
-            if (this._heap.length === 1) return this._heap.pop();
-            const top = this._heap[0];
-            this._heap[0] = this._heap.pop();
-            this._siftDown(0);
-            return top;
-        }
+    // タスクオフセット
+    const T_ID = 0;
+    const T_DURATION = 1;
+    const T_WEIGHT = 2;
+    const T_SIZE = 3;
 
-        // ヒープの先頭N件を取得（キュー表示用、ヒープ構造は維持）
-        peekMany(n) {
-            return this._heap.slice(0, n);
-        }
+    let sharedBuffer = null;
+    let globalView = null;
+    let coreView = null;
+    let queueView = null;
 
-        _siftUp(i) {
-            const heap = this._heap;
-            const compare = this._compare;
-            while (i > 0) {
-                const parent = (i - 1) >> 1;
-                if (compare(heap[i], heap[parent]) >= 0) break;
-                [heap[i], heap[parent]] = [heap[parent], heap[i]];
-                i = parent;
-            }
-        }
+    let coreOffset = 0;
+    let queueOffset = 0;
+    let maxTasks = 0;
 
-        _siftDown(i) {
-            const heap = this._heap;
-            const compare = this._compare;
-            const n = heap.length;
-            while (true) {
-                const left = 2 * i + 1;
-                const right = 2 * i + 2;
-                let smallest = i;
-                if (left < n && compare(heap[left], heap[smallest]) < 0) smallest = left;
-                if (right < n && compare(heap[right], heap[smallest]) < 0) smallest = right;
-                if (smallest === i) break;
-                [heap[i], heap[smallest]] = [heap[smallest], heap[i]];
-                i = smallest;
-            }
-        }
-    }
+    // SJF用: ソート済みキューインデックス配列（SharedArrayBufferとは別にローカル管理）
+    let sjfIndices = null;
+    let sjfLength = 0;
 
-    // =========================================================
-    // Worker 内部状態
-    // =========================================================
-    let isRunning = false;
-    let isPaused = false;
-    let cores = 16;
-    let clockSpeed = 1000;
-    let algorithm = 'fcfs';
+    // タスク割当ループ用の事前計算値
+    let speedFactor = 1;
 
-    let fcfsQueue = [];
-    let sjfHeap = null;
-
-    // コア状態（描画用DOM参照は持たない、計算用データのみ）
-    let coreStates = [];
-    let tasksProcessed = 0;
-    let lastTimestamp = 0;
-
-    // 計算ループ用
-    let loopInterval = null;
-    const TICK_INTERVAL = 16; // 約60fps相当の計算頻度
-
-    // =========================================================
-    // キュー操作
-    // =========================================================
-    function getQueueLength() {
-        return algorithm === 'sjf' ? sjfHeap.size : fcfsQueue.length;
-    }
-
-    function dequeueTask() {
-        if (algorithm === 'sjf') {
-            return sjfHeap.pop();
-        } else {
-            return fcfsQueue.shift();
-        }
-    }
-
-    // キュー表示用データを取得（先頭N件）
-    function getQueuePreview(maxCount) {
-        if (algorithm === 'sjf') {
-            return sjfHeap.peekMany(maxCount);
-        } else {
-            return fcfsQueue.slice(0, maxCount);
-        }
-    }
-
-    // =========================================================
-    // 計算ループ（setIntervalで実行、DOMには触れない）
-    // =========================================================
-    function tick() {
-        if (!isRunning || isPaused) return;
-
-        const now = performance.now();
-        if (!lastTimestamp) lastTimestamp = now;
-        const delta = now - lastTimestamp;
-        lastTimestamp = now;
-
-        let tasksCompletedThisFrame = 0;
-        const speedFactor = Math.max(0.001, clockSpeed / 1000);
-
-        // 完了したコアのインデックスを記録（Mainスレッドでtransition無効化に使用）
-        const completedCoreIndices = [];
-
-        // コア状態の更新
-        for (let i = 0; i < coreStates.length; i++) {
-            const core = coreStates[i];
-            if (core.currentTask) {
-                core.timeSpentMs += delta;
-                const effectiveDuration = core.currentTask.duration * core.currentTask.weight / speedFactor;
-                const progress = Math.min(100, (core.timeSpentMs / effectiveDuration) * 100);
-                core.progress = progress;
-                core.load = Math.min(100, 30 + progress * 0.7);
-
-                if (core.timeSpentMs >= effectiveDuration) {
-                    tasksCompletedThisFrame++;
-                    completedCoreIndices.push(i);
-                    core.currentTask = null;
-                    core.timeSpentMs = 0;
-                    core.progress = 0;
-                    core.load = 0;
-                }
-            }
-        }
-
-        // 空いているコアにタスクを割り当て
-        if (getQueueLength() > 0) {
-            for (let i = 0; i < coreStates.length; i++) {
-                const core = coreStates[i];
-                if (!core.currentTask && getQueueLength() > 0) {
-                    const t = dequeueTask();
-                    if (t) {
-                        core.currentTask = t;
-                        core.timeSpentMs = 0;
-                        core.progress = 0;
-                        core.load = 30;
-                    }
-                }
-            }
-        }
-
-        if (tasksCompletedThisFrame > 0) {
-            tasksProcessed += tasksCompletedThisFrame;
-        }
-
-        // 完了判定
-        let anyBusy = false;
-        for (let i = 0; i < coreStates.length; i++) {
-            if (coreStates[i].currentTask) { anyBusy = true; break; }
-        }
-
-        const isComplete = getQueueLength() === 0 && !anyBusy;
-        if (isComplete) {
-            isRunning = false;
-            if (loopInterval) {
-                clearInterval(loopInterval);
-                loopInterval = null;
-            }
-        }
-
-        // 状態差分をMainスレッドに送信
-        // コア状態は描画に必要な情報のみ抽出（DOM参照は含まない）
-        const coreData = [];
-        for (let i = 0; i < coreStates.length; i++) {
-            const core = coreStates[i];
-            coreData.push({
-                id: core.id,
-                load: core.load,
-                progress: core.progress,
-                // タスク情報（nullの場合はnull）
-                task: core.currentTask ? {
-                    id: core.currentTask.id,
-                    weight: core.currentTask.weight,
-                    duration: core.currentTask.duration
-                } : null
-            });
-        }
-
-        // キュー表示用データ（先頭40件のみ）
-        const queuePreview = getQueuePreview(40);
-        const queueData = queuePreview.map(t => ({
-            id: t.id,
-            size: t.size,
-            weight: t.weight,
-            duration: t.duration
-        }));
-
-        self.postMessage({
-            type: 'state',
-            data: {
-                tasksProcessed: tasksProcessed,
-                queueLength: getQueueLength(),
-                coreStates: coreData,
-                queuePreview: queueData,
-                completedCoreIndices: completedCoreIndices,
-                isComplete: isComplete
-            }
-        });
-    }
-
-    // =========================================================
-    // メッセージハンドラ
-    // =========================================================
     self.onmessage = function(e) {
         const msg = e.data;
 
         switch (msg.type) {
             case 'init':
-                // シミュレーション初期化
-                cores = msg.cores;
-                clockSpeed = msg.clockSpeed;
-                algorithm = msg.algorithm;
-                
-                // キュー初期化
-                fcfsQueue = [];
-                sjfHeap = new MinHeap((a, b) => {
-                    return (a.duration * a.weight) - (b.duration * b.weight);
-                });
-
-                // タスク生成
-                for (let i = 0; i < msg.totalTasks; i++) {
-                    const task = {
-                        id: i,
-                        duration: Math.random() * 2000 + 500,
-                        size: Math.floor(Math.random() * 80) + 20,
-                        weight: Math.random() * 1.5 + 0.5
-                    };
-                    if (algorithm === 'sjf') {
-                        sjfHeap.push(task);
-                    } else {
-                        fcfsQueue.push(task);
-                    }
-                }
-
-                // コア状態初期化
-                coreStates = [];
-                for (let i = 0; i < cores; i++) {
-                    coreStates.push({
-                        id: i,
-                        currentTask: null,
-                        timeSpentMs: 0,
-                        load: 0,
-                        progress: 0
-                    });
-                }
-
-                tasksProcessed = 0;
-                lastTimestamp = 0;
-                isRunning = false;
-                isPaused = false;
-
-                // 初期状態を送信
-                const queuePreview = getQueuePreview(40);
-                self.postMessage({
-                    type: 'initialized',
-                    data: {
-                        cores: cores,
-                        clockSpeed: clockSpeed,
-                        queueLength: getQueueLength(),
-                        queuePreview: queuePreview.map(t => ({
-                            id: t.id,
-                            size: t.size,
-                            weight: t.weight,
-                            duration: t.duration
-                        }))
-                    }
-                });
+                initScheduler(msg);
                 break;
-
-            case 'start':
-                isRunning = true;
-                isPaused = false;
-                lastTimestamp = 0;
-                // 計算ループ開始
-                if (loopInterval) clearInterval(loopInterval);
-                loopInterval = setInterval(tick, TICK_INTERVAL);
+            case 'tick':
+                processTick();
                 break;
-
             case 'pause':
-                isPaused = true;
+                Atomics.store(globalView, G_PAUSED, 1);
                 break;
-
             case 'resume':
-                isPaused = false;
-                lastTimestamp = 0;
+                Atomics.store(globalView, G_PAUSED, 0);
                 break;
-
             case 'stop':
-                isRunning = false;
-                isPaused = false;
-                if (loopInterval) {
-                    clearInterval(loopInterval);
-                    loopInterval = null;
-                }
+                Atomics.store(globalView, G_RUNNING, 0);
                 break;
         }
     };
+
+    function initScheduler(msg) {
+        sharedBuffer = msg.sharedBuffer;
+        const cores = msg.cores;
+        const totalTasks = msg.totalTasks;
+        maxTasks = msg.maxTasks;
+
+        // ビュー設定
+        globalView = new Int32Array(sharedBuffer, 0, GLOBAL_SIZE);
+        
+        coreOffset = GLOBAL_SIZE;
+        coreView = new Int32Array(sharedBuffer, coreOffset * 4, cores * CORE_STRIDE);
+        
+        queueOffset = coreOffset + cores * CORE_STRIDE;
+        queueView = new Int32Array(sharedBuffer, queueOffset * 4, maxTasks * TASK_STRIDE);
+
+        // グローバル状態初期化
+        Atomics.store(globalView, G_TICK, 0);
+        Atomics.store(globalView, G_RUNNING, 0);
+        Atomics.store(globalView, G_PAUSED, 0);
+        Atomics.store(globalView, G_PROCESSED, 0);
+        Atomics.store(globalView, G_QUEUE_HEAD, 0);
+        Atomics.store(globalView, G_QUEUE_TAIL, 0);
+        Atomics.store(globalView, G_CLOCK, msg.clockSpeed);
+        Atomics.store(globalView, G_ALGO, msg.algorithm === 'sjf' ? 1 : 0);
+        Atomics.store(globalView, G_CORE_COUNT, cores);
+        Atomics.store(globalView, G_TOTAL_TASKS, totalTasks);
+
+        // コア状態初期化（全てidle）
+        for (let i = 0; i < cores; i++) {
+            const base = i * CORE_STRIDE;
+            coreView[base + C_TASK_ID] = -1;
+            coreView[base + C_TIME_SPENT] = 0;
+            coreView[base + C_PROGRESS] = 0;
+            coreView[base + C_LOAD] = 0;
+            coreView[base + C_TASK_DURATION] = 0;
+            coreView[base + C_TASK_WEIGHT] = 0;
+            coreView[base + C_COMPLETED] = 0;
+        }
+
+        // タスク生成（固定小数点: x1000）
+        // 乱数生成を高速化するためLCG使用
+        let seed = Date.now();
+        const lcg = () => {
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+            return seed / 0x7fffffff;
+        };
+
+        for (let i = 0; i < totalTasks; i++) {
+            const base = i * TASK_STRIDE;
+            queueView[base + T_ID] = i;
+            // duration: 500-2500ms -> 500000-2500000 (x1000)
+            queueView[base + T_DURATION] = Math.floor(lcg() * 2000000 + 500000);
+            // weight: 0.5-2.0 -> 500-2000 (x1000)
+            queueView[base + T_WEIGHT] = Math.floor(lcg() * 1500 + 500);
+            // size: 20-100
+            queueView[base + T_SIZE] = Math.floor(lcg() * 80) + 20;
+        }
+
+        Atomics.store(globalView, G_QUEUE_TAIL, totalTasks);
+
+        // SJF用: コストでソートしたインデックス配列を作成
+        if (msg.algorithm === 'sjf') {
+            sjfIndices = new Int32Array(totalTasks);
+            for (let i = 0; i < totalTasks; i++) {
+                sjfIndices[i] = i;
+            }
+            // コスト = duration * weight でソート
+            // Array.prototype.sortはTypedArrayに使えないのでクイックソート実装
+            quickSortByCost(sjfIndices, 0, totalTasks - 1);
+            sjfLength = totalTasks;
+        }
+
+        speedFactor = Math.max(1, msg.clockSpeed);
+
+        // 準備完了を通知
+        Atomics.store(globalView, G_SCHEDULER_READY, 1);
+        Atomics.store(globalView, G_RUNNING, 1);
+
+        self.postMessage({ type: 'ready' });
+    }
+
+    // クイックソート（コスト昇順）
+    function quickSortByCost(arr, low, high) {
+        if (low >= high) return;
+        const pivotIdx = partition(arr, low, high);
+        quickSortByCost(arr, low, pivotIdx - 1);
+        quickSortByCost(arr, pivotIdx + 1, high);
+    }
+
+    function partition(arr, low, high) {
+        const pivotTaskIdx = arr[high];
+        const pivotBase = pivotTaskIdx * TASK_STRIDE;
+        const pivotCost = queueView[pivotBase + T_DURATION] * queueView[pivotBase + T_WEIGHT];
+        
+        let i = low - 1;
+        for (let j = low; j < high; j++) {
+            const taskIdx = arr[j];
+            const base = taskIdx * TASK_STRIDE;
+            const cost = queueView[base + T_DURATION] * queueView[base + T_WEIGHT];
+            if (cost <= pivotCost) {
+                i++;
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+        }
+        [arr[i + 1], arr[high]] = [arr[high], arr[i + 1]];
+        return i + 1;
+    }
+
+    function processTick() {
+        const running = Atomics.load(globalView, G_RUNNING);
+        const paused = Atomics.load(globalView, G_PAUSED);
+        
+        if (!running || paused) {
+            self.postMessage({ type: 'tick-done', paused: true });
+            return;
+        }
+
+        const tick = Atomics.add(globalView, G_TICK, 1);
+        const cores = Atomics.load(globalView, G_CORE_COUNT);
+        const algo = Atomics.load(globalView, G_ALGO);
+
+        // 空きコアにタスクを割り当て
+        // 【最適化ポイント】
+        // - FCFS: キューヘッドから順に取り出すだけ（O(1)）
+        // - SJF: 事前ソート済みインデックスから取り出し（O(1)）
+        
+        if (algo === 0) {
+            // FCFS
+            assignTasksFCFS(cores);
+        } else {
+            // SJF
+            assignTasksSJF(cores);
+        }
+
+        self.postMessage({ type: 'tick-done', tick: tick });
+    }
+
+    function assignTasksFCFS(cores) {
+        let head = Atomics.load(globalView, G_QUEUE_HEAD);
+        const tail = Atomics.load(globalView, G_QUEUE_TAIL);
+
+        for (let i = 0; i < cores && head < tail; i++) {
+            const coreBase = i * CORE_STRIDE;
+            const taskId = coreView[coreBase + C_TASK_ID];
+            
+            // 空きコアのみ
+            if (taskId === -1) {
+                const taskBase = head * TASK_STRIDE;
+                
+                // タスク割当
+                coreView[coreBase + C_TASK_ID] = queueView[taskBase + T_ID];
+                coreView[coreBase + C_TASK_DURATION] = queueView[taskBase + T_DURATION];
+                coreView[coreBase + C_TASK_WEIGHT] = queueView[taskBase + T_WEIGHT];
+                coreView[coreBase + C_TIME_SPENT] = 0;
+                coreView[coreBase + C_PROGRESS] = 0;
+                coreView[coreBase + C_LOAD] = 30;
+                coreView[coreBase + C_COMPLETED] = 0;
+                
+                head++;
+            }
+        }
+
+        Atomics.store(globalView, G_QUEUE_HEAD, head);
+    }
+
+    function assignTasksSJF(cores) {
+        if (sjfLength === 0) return;
+
+        let assigned = 0;
+        let sjfPtr = 0;
+
+        for (let i = 0; i < cores && sjfPtr < sjfLength; i++) {
+            const coreBase = i * CORE_STRIDE;
+            const taskId = coreView[coreBase + C_TASK_ID];
+            
+            if (taskId === -1) {
+                // SJFインデックスから次のタスクを取得
+                const taskIdx = sjfIndices[sjfPtr];
+                const taskBase = taskIdx * TASK_STRIDE;
+                
+                coreView[coreBase + C_TASK_ID] = queueView[taskBase + T_ID];
+                coreView[coreBase + C_TASK_DURATION] = queueView[taskBase + T_DURATION];
+                coreView[coreBase + C_TASK_WEIGHT] = queueView[taskBase + T_WEIGHT];
+                coreView[coreBase + C_TIME_SPENT] = 0;
+                coreView[coreBase + C_PROGRESS] = 0;
+                coreView[coreBase + C_LOAD] = 30;
+                coreView[coreBase + C_COMPLETED] = 0;
+                
+                sjfPtr++;
+                assigned++;
+            }
+        }
+
+        // 使用済みタスクを配列から削除（先頭をシフト）
+        if (sjfPtr > 0) {
+            for (let i = 0; i < sjfLength - sjfPtr; i++) {
+                sjfIndices[i] = sjfIndices[i + sjfPtr];
+            }
+            sjfLength -= sjfPtr;
+            // キューヘッドも更新
+            Atomics.add(globalView, G_QUEUE_HEAD, sjfPtr);
+        }
+    }
     </script>
 
     <!-- =========================================================
-         Main スレッド（描画のみ担当）
+         Core Update Worker
+         - 担当範囲のコアの進捗更新
+         - タスク完了検出
+    ========================================================= -->
+    <script id="core-worker" type="text/js-worker">
+    'use strict';
+
+    // メモリレイアウト定数（Scheduler Workerと同一）
+    const GLOBAL_OFFSET = 0;
+    const GLOBAL_SIZE = 16;
+    const CORE_STRIDE = 8;
+
+    const G_TICK = 0;
+    const G_RUNNING = 1;
+    const G_PAUSED = 2;
+    const G_PROCESSED = 3;
+    const G_CLOCK = 6;
+    const G_CORE_COUNT = 8;
+
+    const C_TASK_ID = 0;
+    const C_TIME_SPENT = 1;
+    const C_PROGRESS = 2;
+    const C_LOAD = 3;
+    const C_TASK_DURATION = 4;
+    const C_TASK_WEIGHT = 5;
+    const C_COMPLETED = 6;
+
+    let sharedBuffer = null;
+    let globalView = null;
+    let coreView = null;
+
+    let startCore = 0;
+    let endCore = 0;
+    let workerId = 0;
+
+    // 前回のtick時刻（経過時間計算用）
+    let lastTickTime = 0;
+
+    self.onmessage = function(e) {
+        const msg = e.data;
+
+        switch (msg.type) {
+            case 'init':
+                initWorker(msg);
+                break;
+            case 'tick':
+                processCoreTick(msg.delta);
+                break;
+        }
+    };
+
+    function initWorker(msg) {
+        sharedBuffer = msg.sharedBuffer;
+        startCore = msg.startCore;
+        endCore = msg.endCore;
+        workerId = msg.workerId;
+
+        globalView = new Int32Array(sharedBuffer, 0, GLOBAL_SIZE);
+        
+        const coreOffset = GLOBAL_SIZE;
+        const totalCores = Atomics.load(globalView, G_CORE_COUNT);
+        coreView = new Int32Array(sharedBuffer, coreOffset * 4, totalCores * CORE_STRIDE);
+
+        lastTickTime = performance.now();
+
+        self.postMessage({ type: 'ready', workerId: workerId });
+    }
+
+    function processCoreTick(delta) {
+        const running = Atomics.load(globalView, G_RUNNING);
+        const paused = Atomics.load(globalView, G_PAUSED);
+        
+        if (!running || paused) {
+            self.postMessage({ type: 'tick-done', workerId: workerId, completed: 0 });
+            return;
+        }
+
+        const clockSpeed = Atomics.load(globalView, G_CLOCK);
+        // speedFactor: clockSpeed=1000 -> 1.0, clockSpeed=2000 -> 2.0
+        // 固定小数点演算のため x1000 で計算
+        const speedFactorK = clockSpeed; // clockSpeed そのものが x1000 相当
+
+        let completedCount = 0;
+
+        /*
+        【最適化ポイント】
+        - 担当範囲のコアのみ処理（他Workerと競合なし）
+        - ブランチ予測に優しい単純ループ
+        - 連続メモリアクセスでキャッシュ効率最大化
+        - 固定小数点演算で浮動小数点を回避
+        */
+        
+        // delta は ms、固定小数点 x1000 に変換
+        const deltaK = Math.floor(delta * 1000);
+
+        for (let i = startCore; i < endCore; i++) {
+            const base = i * CORE_STRIDE;
+            const taskId = coreView[base + C_TASK_ID];
+            
+            // タスク実行中のコアのみ処理
+            // 【最適化】早期continue でブランチミス削減
+            if (taskId < 0) continue;
+
+            // 経過時間加算（固定小数点）
+            const timeSpent = coreView[base + C_TIME_SPENT] + deltaK;
+            coreView[base + C_TIME_SPENT] = timeSpent;
+
+            // 有効時間 = duration * weight / speedFactor
+            // 全て x1000 なので: (duration_K * weight_K) / speedFactor_K
+            // = (duration * 1000 * weight * 1000) / (clockSpeed * 1000)
+            // = duration * weight * 1000 / clockSpeed
+            const duration = coreView[base + C_TASK_DURATION];
+            const weight = coreView[base + C_TASK_WEIGHT];
+            // effectiveDuration in K (x1000)
+            const effectiveDurationK = Math.floor((duration * weight) / speedFactorK);
+
+            // 進捗計算（0-100）
+            const progress = Math.min(100, Math.floor((timeSpent * 100) / effectiveDurationK));
+            coreView[base + C_PROGRESS] = progress;
+            
+            // 負荷計算
+            coreView[base + C_LOAD] = Math.min(100, 30 + Math.floor(progress * 0.7));
+
+            // 完了判定
+            if (timeSpent >= effectiveDurationK) {
+                // タスク完了
+                coreView[base + C_TASK_ID] = -1;
+                coreView[base + C_TIME_SPENT] = 0;
+                coreView[base + C_PROGRESS] = 0;
+                coreView[base + C_LOAD] = 0;
+                coreView[base + C_COMPLETED] = 1;  // 完了フラグ
+                completedCount++;
+            } else {
+                coreView[base + C_COMPLETED] = 0;
+            }
+        }
+
+        // 完了タスク数をグローバルカウンタに加算（アトミック）
+        if (completedCount > 0) {
+            Atomics.add(globalView, G_PROCESSED, completedCount);
+        }
+
+        self.postMessage({ type: 'tick-done', workerId: workerId, completed: completedCount });
+    }
+    </script>
+
+    <!-- =========================================================
+         Main Thread
+         - Worker管理
+         - 描画（requestAnimationFrame）
+         - UI制御
     ========================================================= -->
     <script>
     (function() {
         'use strict';
 
         // =========================================================
-        // Web Worker 生成
+        // SharedArrayBuffer サポートチェック
         // =========================================================
-        const workerCode = document.getElementById('worker-code').textContent;
-        const blob = new Blob([workerCode], { type: 'application/javascript' });
-        const workerUrl = URL.createObjectURL(blob);
-        let worker = null;
+        const sabSupported = typeof SharedArrayBuffer !== 'undefined';
+        const sabStatus = document.getElementById('sabStatus');
+        
+        if (sabSupported) {
+            sabStatus.style.background = '#166534';
+            sabStatus.innerHTML = '✅ SharedArrayBuffer 利用可能';
+        } else {
+            sabStatus.style.background = '#991b1b';
+            sabStatus.innerHTML = '❌ SharedArrayBuffer 利用不可<br>COOP/COEPヘッダーが必要です';
+            document.getElementById('startBtn').disabled = true;
+        }
 
         // =========================================================
-        // 描画用状態（Workerから受信したデータを保持）
+        // 定数（Worker側と同一）
         // =========================================================
-        let cores = 16;
+        const GLOBAL_SIZE = 16;
+        const CORE_STRIDE = 8;
+        const TASK_STRIDE = 4;
+
+        const G_TICK = 0;
+        const G_RUNNING = 1;
+        const G_PAUSED = 2;
+        const G_PROCESSED = 3;
+        const G_QUEUE_HEAD = 4;
+        const G_QUEUE_TAIL = 5;
+        const G_CLOCK = 6;
+        const G_CORE_COUNT = 8;
+        const G_TOTAL_TASKS = 9;
+        const G_SCHEDULER_READY = 10;
+
+        const C_TASK_ID = 0;
+        const C_TIME_SPENT = 1;
+        const C_PROGRESS = 2;
+        const C_LOAD = 3;
+        const C_TASK_DURATION = 4;
+        const C_TASK_WEIGHT = 5;
+        const C_COMPLETED = 6;
+
+        const T_ID = 0;
+        const T_DURATION = 1;
+        const T_WEIGHT = 2;
+        const T_SIZE = 3;
+
+        // =========================================================
+        // 状態
+        // =========================================================
+        let sharedBuffer = null;
+        let globalView = null;
+        let coreView = null;
+        let queueView = null;
+
+        let schedulerWorker = null;
+        let coreWorkers = [];
+        let numCoreWorkers = 4;
+
+        let cores = 1000;
         let clockSpeed = 1000;
+        let totalTasks = 50000;
         let algorithm = 'fcfs';
+        let maxTasks = 500000;
+
         let isRunning = false;
         let isPaused = false;
 
-        // Workerから受信した最新の状態
-        let latestState = null;
+        // Worker準備完了カウンタ
+        let readyWorkers = 0;
+        let expectedWorkers = 0;
 
-        // 描画スロットリング用
+        // Tick管理
+        let tickInterval = null;
+        const TICK_RATE = 60; // 60 ticks/sec
+        let lastTickTime = 0;
+        let tickCount = 0;
+        let tpsCounter = 0;
+        let lastTpsTime = 0;
+
+        // 描画
         let rafId = null;
         let lastRenderTime = 0;
-        const RENDER_INTERVAL = 33; // 約30fps
-
-        // キュー表示
+        const RENDER_INTERVAL = 33;
+        const MAX_DISPLAY_CORES = 200;
         const MAX_QUEUE_DISPLAY = 40;
-        let queueDirty = true;
 
-        // 統計キャッシュ
-        let prevStats = { cores: -1, clock: -1, processed: -1, remaining: -1, queueCount: -1 };
-
-        // コア状態（描画用、DOM参照を含む）
-        let coreRenderStates = [];
-
-        // =========================================================
-        // DOM キャッシュ
-        // =========================================================
+        // DOMキャッシュ
         const setupScreen = document.getElementById('setupScreen');
         const simScreen = document.getElementById('simScreen');
-        const startBtn = document.getElementById('startBtn');
-        const resetBtn = document.getElementById('resetBtn');
-        const pauseBtn = document.getElementById('pauseBtn');
-        const homeBtn = document.getElementById('homeBtn');
-        const algoSelect = document.getElementById('algoSelect');
         const coresContainer = document.getElementById('coresContainer');
         const queueContainer = document.getElementById('queueContainer');
         const completeMessage = document.getElementById('completeMessage');
@@ -536,36 +765,315 @@
         const statAlgoEl = document.getElementById('statAlgo');
         const finalCountEl = document.getElementById('finalCount');
 
-        // キュー表示用DOMプール
+        const perfTickEl = document.getElementById('perfTick');
+        const perfTpsEl = document.getElementById('perfTps');
+        const perfWorkersEl = document.getElementById('perfWorkers');
+        const perfSabEl = document.getElementById('perfSab');
+
+        // 描画用DOM参照
+        let coreRenderStates = [];
         let queueDomPool = [];
         let queueMoreEl = null;
+
+        let prevStats = { processed: -1, remaining: -1, queueCount: -1 };
+
+        // =========================================================
+        // Worker生成（Blob URL）
+        // =========================================================
+        function createWorkerFromScript(scriptId) {
+            const code = document.getElementById(scriptId).textContent;
+            const blob = new Blob([code], { type: 'application/javascript' });
+            return new Worker(URL.createObjectURL(blob));
+        }
 
         // =========================================================
         // イベントリスナー
         // =========================================================
-        startBtn.addEventListener('click', startSimulation);
-        resetBtn.addEventListener('click', resetSimulation);
-        pauseBtn.addEventListener('click', togglePause);
-        homeBtn.addEventListener('click', backToHome);
-        algoSelect.addEventListener('change', () => {
-            algorithm = algoSelect.value;
+        document.getElementById('startBtn').addEventListener('click', startSimulation);
+        document.getElementById('resetBtn').addEventListener('click', resetSimulation);
+        document.getElementById('pauseBtn').addEventListener('click', togglePause);
+        document.getElementById('homeBtn').addEventListener('click', backToHome);
+        document.getElementById('algoSelect').addEventListener('change', function() {
+            algorithm = this.value;
             statAlgoEl.textContent = algorithm.toUpperCase();
         });
 
         // =========================================================
-        // コアDOM初期化（一度だけ生成）
+        // シミュレーション開始
+        // =========================================================
+        function startSimulation() {
+            if (!sabSupported) {
+                alert('SharedArrayBuffer が利用できません');
+                return;
+            }
+
+            // パラメータ取得
+            cores = Math.max(1, Math.min(10000, parseInt(document.getElementById('coresInput').value) || 1000));
+            clockSpeed = Math.max(100, parseInt(document.getElementById('clockInput').value) || 1000);
+            totalTasks = Math.max(1, Math.min(500000, parseInt(document.getElementById('tasksInput').value) || 50000));
+            numCoreWorkers = Math.max(1, Math.min(8, parseInt(document.getElementById('workersInput').value) || 4));
+            algorithm = document.getElementById('algoSelect').value;
+
+            statAlgoEl.textContent = algorithm.toUpperCase();
+
+            // SharedArrayBuffer サイズ計算
+            const globalBytes = GLOBAL_SIZE * 4;
+            const coreBytes = cores * CORE_STRIDE * 4;
+            const queueBytes = maxTasks * TASK_STRIDE * 4;
+            const totalBytes = globalBytes + coreBytes + queueBytes;
+
+            console.log(`SharedArrayBuffer: ${(totalBytes / 1024).toFixed(1)} KB`);
+            console.log(`  Global: ${globalBytes} bytes`);
+            console.log(`  Cores: ${coreBytes} bytes (${cores} cores)`);
+            console.log(`  Queue: ${queueBytes} bytes (${maxTasks} max tasks)`);
+
+            perfSabEl.textContent = (totalBytes / 1024).toFixed(1);
+
+            // SharedArrayBuffer 確保
+            sharedBuffer = new SharedArrayBuffer(totalBytes);
+            globalView = new Int32Array(sharedBuffer, 0, GLOBAL_SIZE);
+            
+            const coreOffset = GLOBAL_SIZE;
+            coreView = new Int32Array(sharedBuffer, coreOffset * 4, cores * CORE_STRIDE);
+            
+            const queueOffset = coreOffset + cores * CORE_STRIDE;
+            queueView = new Int32Array(sharedBuffer, queueOffset * 4, maxTasks * TASK_STRIDE);
+
+            // UI切り替え
+            setupScreen.classList.add('hidden');
+            simScreen.classList.remove('hidden');
+            completeMessage.classList.add('hidden');
+
+            // DOM初期化
+            initCoreDom();
+            initQueueDomPool();
+
+            // Worker起動
+            readyWorkers = 0;
+            expectedWorkers = 1 + numCoreWorkers; // Scheduler + Core Workers
+
+            // Scheduler Worker
+            schedulerWorker = createWorkerFromScript('scheduler-worker');
+            schedulerWorker.onmessage = handleSchedulerMessage;
+            schedulerWorker.postMessage({
+                type: 'init',
+                sharedBuffer: sharedBuffer,
+                cores: cores,
+                totalTasks: totalTasks,
+                maxTasks: maxTasks,
+                clockSpeed: clockSpeed,
+                algorithm: algorithm
+            });
+
+            // Core Workers（コア範囲を分割）
+            coreWorkers = [];
+            const coresPerWorker = Math.ceil(cores / numCoreWorkers);
+            
+            for (let i = 0; i < numCoreWorkers; i++) {
+                const startCore = i * coresPerWorker;
+                const endCore = Math.min((i + 1) * coresPerWorker, cores);
+                
+                if (startCore >= cores) break;
+
+                const worker = createWorkerFromScript('core-worker');
+                worker.onmessage = handleCoreWorkerMessage;
+                worker.postMessage({
+                    type: 'init',
+                    sharedBuffer: sharedBuffer,
+                    startCore: startCore,
+                    endCore: endCore,
+                    workerId: i
+                });
+                coreWorkers.push(worker);
+            }
+
+            perfWorkersEl.textContent = `1+${coreWorkers.length}`;
+
+            isRunning = true;
+            isPaused = false;
+            tickCount = 0;
+            tpsCounter = 0;
+            lastTpsTime = performance.now();
+
+            // 初期表示
+            statCoresEl.textContent = cores;
+            statClockEl.textContent = clockSpeed + ' MHz';
+        }
+
+        // =========================================================
+        // Worker メッセージハンドラ
+        // =========================================================
+        function handleSchedulerMessage(e) {
+            const msg = e.data;
+            
+            switch (msg.type) {
+                case 'ready':
+                    readyWorkers++;
+                    checkAllReady();
+                    break;
+                case 'tick-done':
+                    // スケジューラのtick完了
+                    break;
+            }
+        }
+
+        function handleCoreWorkerMessage(e) {
+            const msg = e.data;
+            
+            switch (msg.type) {
+                case 'ready':
+                    readyWorkers++;
+                    checkAllReady();
+                    break;
+                case 'tick-done':
+                    // Core Workerのtick完了
+                    break;
+            }
+        }
+
+        function checkAllReady() {
+            if (readyWorkers >= expectedWorkers) {
+                console.log('All workers ready, starting tick loop');
+                startTickLoop();
+                rafId = requestAnimationFrame(renderLoop);
+            }
+        }
+
+        // =========================================================
+        // Tick ループ（計算駆動）
+        // =========================================================
+        function startTickLoop() {
+            lastTickTime = performance.now();
+            
+            // setIntervalでtickを駆動
+            tickInterval = setInterval(() => {
+                if (!isRunning || isPaused) return;
+
+                const now = performance.now();
+                const delta = now - lastTickTime;
+                lastTickTime = now;
+
+                tickCount++;
+                tpsCounter++;
+
+                // TPS計算（1秒ごと）
+                if (now - lastTpsTime >= 1000) {
+                    perfTpsEl.textContent = tpsCounter;
+                    tpsCounter = 0;
+                    lastTpsTime = now;
+                }
+
+                perfTickEl.textContent = tickCount;
+
+                // Core Workersにtick送信
+                for (const worker of coreWorkers) {
+                    worker.postMessage({ type: 'tick', delta: delta });
+                }
+
+                // Scheduler Workerにtick送信（タスク割当）
+                schedulerWorker.postMessage({ type: 'tick' });
+
+                // 完了チェック
+                const processed = Atomics.load(globalView, G_PROCESSED);
+                const head = Atomics.load(globalView, G_QUEUE_HEAD);
+                const tail = Atomics.load(globalView, G_QUEUE_TAIL);
+                const queueLength = tail - head;
+
+                // 全タスク完了判定
+                if (processed >= totalTasks) {
+                    completeSimulation();
+                }
+
+            }, 1000 / TICK_RATE);
+        }
+
+        function completeSimulation() {
+            isRunning = false;
+            if (tickInterval) {
+                clearInterval(tickInterval);
+                tickInterval = null;
+            }
+            completeMessage.classList.remove('hidden');
+            finalCountEl.textContent = Atomics.load(globalView, G_PROCESSED);
+        }
+
+        // =========================================================
+        // 描画ループ（requestAnimationFrame）
+        // =========================================================
+        function renderLoop(timestamp) {
+            if (!sharedBuffer) {
+                rafId = null;
+                return;
+            }
+
+            const timeSinceRender = timestamp - lastRenderTime;
+            if (timeSinceRender >= RENDER_INTERVAL) {
+                lastRenderTime = timestamp;
+                updateStats();
+                renderQueue();
+                renderCores();
+            }
+
+            if (isRunning || !Atomics.load(globalView, G_RUNNING)) {
+                rafId = requestAnimationFrame(renderLoop);
+            } else {
+                rafId = null;
+            }
+        }
+
+        // =========================================================
+        // 統計更新
+        // =========================================================
+        function updateStats() {
+            const processed = Atomics.load(globalView, G_PROCESSED);
+            const head = Atomics.load(globalView, G_QUEUE_HEAD);
+            const tail = Atomics.load(globalView, G_QUEUE_TAIL);
+            const queueLength = tail - head;
+
+            // 実行中タスク数をコアから集計
+            let runningCount = 0;
+            const displayCores = Math.min(cores, MAX_DISPLAY_CORES);
+            for (let i = 0; i < displayCores; i++) {
+                if (coreView[i * CORE_STRIDE + C_TASK_ID] >= 0) {
+                    runningCount++;
+                }
+            }
+            // 表示外のコアも概算
+            if (cores > MAX_DISPLAY_CORES) {
+                runningCount = Math.floor(runningCount * cores / MAX_DISPLAY_CORES);
+            }
+
+            const remaining = queueLength + runningCount;
+
+            if (prevStats.processed !== processed) {
+                statProcessedEl.textContent = processed;
+                prevStats.processed = processed;
+            }
+            if (prevStats.remaining !== remaining) {
+                statRemainingEl.textContent = remaining;
+                prevStats.remaining = remaining;
+            }
+            if (prevStats.queueCount !== queueLength) {
+                queueCountEl.textContent = queueLength;
+                prevStats.queueCount = queueLength;
+            }
+        }
+
+        // =========================================================
+        // コアDOM初期化
         // =========================================================
         function initCoreDom() {
             coresContainer.innerHTML = '';
             coreRenderStates = [];
             
+            const displayCores = Math.min(cores, MAX_DISPLAY_CORES);
             const frag = document.createDocumentFragment();
 
-            for (let i = 0; i < cores; i++) {
+            for (let i = 0; i < displayCores; i++) {
                 const renderState = {
                     prevLoad: -1,
                     prevProgress: -1,
-                    prevTaskId: -1,
+                    prevTaskId: -2,
                     dom: null
                 };
 
@@ -619,6 +1127,14 @@
                 frag.appendChild(root);
             }
 
+            // 表示上限を超える場合の注記
+            if (cores > MAX_DISPLAY_CORES) {
+                const note = document.createElement('div');
+                note.style.cssText = 'grid-column: 1/-1; text-align:center; color:#c084fc; padding:12px;';
+                note.textContent = `... ${cores - MAX_DISPLAY_CORES} コアは非表示（パフォーマンス最適化）`;
+                frag.appendChild(note);
+            }
+
             coresContainer.appendChild(frag);
         }
 
@@ -650,235 +1166,86 @@
         }
 
         // =========================================================
-        // シミュレーション開始
+        // キュー描画
         // =========================================================
-        function startSimulation() {
-            cores = Math.max(1, parseInt(document.getElementById('coresInput').value) || 16);
-            clockSpeed = Math.max(1, parseInt(document.getElementById('clockInput').value) || 1000);
-            const totalTasks = Math.max(1, parseInt(document.getElementById('tasksInput').value) || 1000);
-            algorithm = algoSelect.value || 'fcfs';
-            statAlgoEl.textContent = algorithm.toUpperCase();
-
-            // 状態リセット
-            isRunning = true;
-            isPaused = false;
-            latestState = null;
-            lastRenderTime = 0;
-            queueDirty = true;
-            prevStats = { cores: -1, clock: -1, processed: -1, remaining: -1, queueCount: -1 };
-
-            // UI切り替え
-            setupScreen.classList.add('hidden');
-            simScreen.classList.remove('hidden');
-            completeMessage.classList.add('hidden');
-
-            // DOM初期化
-            initCoreDom();
-            initQueueDomPool();
-
-            // Worker生成（既存のWorkerがあれば終了）
-            if (worker) {
-                worker.terminate();
-            }
-            worker = new Worker(workerUrl);
-            worker.onmessage = handleWorkerMessage;
-
-            // Workerにシミュレーション設定を送信
-            worker.postMessage({
-                type: 'init',
-                cores: cores,
-                clockSpeed: clockSpeed,
-                totalTasks: totalTasks,
-                algorithm: algorithm
-            });
-        }
-
-        // =========================================================
-        // Workerからのメッセージ処理
-        // =========================================================
-        function handleWorkerMessage(e) {
-            const msg = e.data;
-
-            switch (msg.type) {
-                case 'initialized':
-                    // 初期状態を受信、描画開始
-                    latestState = {
-                        tasksProcessed: 0,
-                        queueLength: msg.data.queueLength,
-                        coreStates: [],
-                        queuePreview: msg.data.queuePreview,
-                        completedCoreIndices: [],
-                        isComplete: false
-                    };
-                    // 初回描画
-                    updateStats(true);
-                    renderQueue(true);
-                    renderCores(true);
-                    // Workerに計算開始を指示
-                    worker.postMessage({ type: 'start' });
-                    // 描画ループ開始
-                    rafId = requestAnimationFrame(renderLoop);
-                    break;
-
-                case 'state':
-                    // 計算結果を受信
-                    latestState = msg.data;
-                    queueDirty = true;
-
-                    // 完了したコアのプログレスバーを即座に0%にリセット
-                    // （CSS transitionを無効化して逆アニメーションを防ぐ）
-                    if (msg.data.completedCoreIndices && msg.data.completedCoreIndices.length > 0) {
-                        for (const idx of msg.data.completedCoreIndices) {
-                            if (coreRenderStates[idx]) {
-                                const fill = coreRenderStates[idx].dom.progressFill;
-                                fill.style.transition = 'none';
-                                fill.style.width = '0%';
-                                fill.offsetWidth; // 強制リフロー
-                                fill.style.transition = '';
-                                coreRenderStates[idx].prevProgress = 0;
-                            }
-                        }
-                    }
-
-                    // 完了処理
-                    if (msg.data.isComplete) {
-                        isRunning = false;
-                        completeMessage.classList.remove('hidden');
-                        finalCountEl.textContent = msg.data.tasksProcessed;
-                    }
-                    break;
-            }
-        }
-
-        // =========================================================
-        // 描画ループ（requestAnimationFrameで実行）
-        // =========================================================
-        function renderLoop(timestamp) {
-            if (!isRunning && !latestState) {
-                rafId = null;
-                return;
-            }
-
-            // スロットリング（約30fps）
-            const timeSinceRender = timestamp - lastRenderTime;
-            if (timeSinceRender >= RENDER_INTERVAL) {
-                lastRenderTime = timestamp;
-                if (latestState) {
-                    updateStats(false);
-                    renderQueue(false);
-                    renderCores(false);
-                }
-            }
-
-            // 完了していなければ継続
-            if (isRunning || (latestState && !latestState.isComplete)) {
-                rafId = requestAnimationFrame(renderLoop);
-            } else {
-                rafId = null;
-            }
-        }
-
-        // =========================================================
-        // 統計更新（変更時のみDOM更新）
-        // =========================================================
-        function updateStats(force) {
-            if (!latestState) return;
-
-            const processed = latestState.tasksProcessed;
-            const queueLen = latestState.queueLength;
-            const runningCount = latestState.coreStates ? 
-                latestState.coreStates.filter(c => c.task).length : 0;
-            const remaining = queueLen + runningCount;
-
-            if (force || prevStats.cores !== cores) {
-                statCoresEl.textContent = cores;
-                prevStats.cores = cores;
-            }
-            if (force || prevStats.clock !== clockSpeed) {
-                statClockEl.textContent = clockSpeed + ' MHz';
-                prevStats.clock = clockSpeed;
-            }
-            if (force || prevStats.processed !== processed) {
-                statProcessedEl.textContent = processed;
-                prevStats.processed = processed;
-            }
-            if (force || prevStats.remaining !== remaining) {
-                statRemainingEl.textContent = remaining;
-                prevStats.remaining = remaining;
-            }
-            if (force || prevStats.queueCount !== queueLen) {
-                queueCountEl.textContent = queueLen;
-                prevStats.queueCount = queueLen;
-            }
-        }
-
-        // =========================================================
-        // キュー描画（DOMプール再利用）
-        // =========================================================
-        function renderQueue(force) {
-            if (!force && !queueDirty) return;
-            if (!latestState) return;
-            queueDirty = false;
-
-            const queueArray = latestState.queuePreview || [];
-            const totalQueueLength = latestState.queueLength || 0;
-            const displayCount = Math.min(queueArray.length, MAX_QUEUE_DISPLAY);
+        function renderQueue() {
+            const head = Atomics.load(globalView, G_QUEUE_HEAD);
+            const tail = Atomics.load(globalView, G_QUEUE_TAIL);
+            const queueLength = tail - head;
+            const displayCount = Math.min(queueLength, MAX_QUEUE_DISPLAY);
 
             for (let i = 0; i < MAX_QUEUE_DISPLAY; i++) {
                 const el = queueDomPool[i];
                 if (i < displayCount) {
-                    const task = queueArray[i];
+                    const taskIdx = head + i;
+                    const base = taskIdx * TASK_STRIDE;
+                    const taskId = queueView[base + T_ID];
+                    const size = queueView[base + T_SIZE];
+                    const weight = queueView[base + T_WEIGHT] / 1000;
+                    const duration = queueView[base + T_DURATION] / 1000;
+
                     el.style.display = '';
-                    el.style.minWidth = Math.max(24, task.size) + 'px';
-                    el.textContent = `T${task.id}`;
-                    el.title = `w:${task.weight.toFixed(2)} dur:${Math.round(task.duration)}ms`;
+                    el.style.minWidth = Math.max(24, size) + 'px';
+                    el.textContent = `T${taskId}`;
+                    el.title = `w:${weight.toFixed(2)} dur:${Math.round(duration)}ms`;
                 } else {
                     el.style.display = 'none';
                 }
             }
 
-            if (totalQueueLength > MAX_QUEUE_DISPLAY) {
+            if (queueLength > MAX_QUEUE_DISPLAY) {
                 queueMoreEl.style.display = '';
-                queueMoreEl.textContent = `+${totalQueueLength - MAX_QUEUE_DISPLAY} more`;
+                queueMoreEl.textContent = `+${queueLength - MAX_QUEUE_DISPLAY} more`;
             } else {
                 queueMoreEl.style.display = 'none';
             }
         }
 
         // =========================================================
-        // コア描画（差分更新）
+        // コア描画（SharedArrayBufferから直接読み取り）
         // =========================================================
-        function renderCores(force) {
-            if (!latestState || !latestState.coreStates) return;
+        function renderCores() {
+            const displayCores = Math.min(cores, MAX_DISPLAY_CORES);
 
-            const coreData = latestState.coreStates;
-
-            for (let i = 0; i < coreRenderStates.length; i++) {
+            for (let i = 0; i < displayCores; i++) {
                 const renderState = coreRenderStates[i];
                 const dom = renderState.dom;
-                const data = coreData[i];
-                
-                if (!data) continue;
+                const base = i * CORE_STRIDE;
 
-                const taskId = data.task ? data.task.id : -1;
-                const load = data.load || 0;
+                const taskId = coreView[base + C_TASK_ID];
+                const progress = coreView[base + C_PROGRESS];
+                const load = coreView[base + C_LOAD];
+                const completed = coreView[base + C_COMPLETED];
 
-                // 負荷クラスの更新
-                if (force || renderState.prevLoad !== load) {
-                    const root = dom.root;
-                    root.classList.toggle('active-high', load > 70);
-                    root.classList.toggle('active-mid', load > 40 && load <= 70);
-                    root.classList.toggle('active-low', load > 0 && load <= 40);
+                // 完了フラグが立っている場合、transition無効化でリセット
+                if (completed === 1) {
+                    const fill = dom.progressFill;
+                    fill.style.transition = 'none';
+                    fill.style.width = '0%';
+                    fill.offsetWidth;
+                    fill.style.transition = '';
+                    renderState.prevProgress = 0;
+                    coreView[base + C_COMPLETED] = 0; // フラグクリア
+                }
+
+                // 負荷クラス更新
+                if (renderState.prevLoad !== load) {
+                    dom.root.classList.toggle('active-high', load > 70);
+                    dom.root.classList.toggle('active-mid', load > 40 && load <= 70);
+                    dom.root.classList.toggle('active-low', load > 0 && load <= 40);
                     renderState.prevLoad = load;
                 }
 
-                // タスク表示の更新
-                if (force || renderState.prevTaskId !== taskId) {
-                    if (data.task) {
+                // タスク表示更新
+                if (renderState.prevTaskId !== taskId) {
+                    if (taskId >= 0) {
                         dom.taskBox.style.display = '';
                         dom.idle.style.display = 'none';
-                        dom.taskName.textContent = `T${data.task.id}`;
-                        dom.info.textContent = `w:${data.task.weight.toFixed(2)} dur:${Math.round(data.task.duration)}ms`;
+                        dom.taskName.textContent = `T${taskId}`;
+                        
+                        const duration = coreView[base + C_TASK_DURATION] / 1000;
+                        const weight = coreView[base + C_TASK_WEIGHT] / 1000;
+                        dom.info.textContent = `w:${weight.toFixed(2)} dur:${Math.round(duration)}ms`;
                     } else {
                         dom.taskBox.style.display = 'none';
                         dom.idle.style.display = '';
@@ -886,13 +1253,10 @@
                     renderState.prevTaskId = taskId;
                 }
 
-                // プログレスバーの更新
-                if (data.task) {
-                    const progressInt = Math.round(data.progress || 0);
-                    if (force || renderState.prevProgress !== progressInt) {
-                        dom.progressFill.style.width = progressInt + '%';
-                        renderState.prevProgress = progressInt;
-                    }
+                // プログレスバー更新
+                if (taskId >= 0 && renderState.prevProgress !== progress) {
+                    dom.progressFill.style.width = progress + '%';
+                    renderState.prevProgress = progress;
                 }
             }
         }
@@ -901,38 +1265,48 @@
         // リセット
         // =========================================================
         function resetSimulation() {
-            isRunning = false;
-            isPaused = false;
-            if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-            if (worker) {
-                worker.postMessage({ type: 'stop' });
-                worker.terminate();
-                worker = null;
-            }
-            latestState = null;
-            coreRenderStates = [];
+            stopAll();
             setupScreen.classList.remove('hidden');
             simScreen.classList.add('hidden');
             completeMessage.classList.add('hidden');
-            pauseBtn.textContent = '⏸️ 一時停止';
+            document.getElementById('pauseBtn').textContent = '⏸️ 一時停止';
         }
 
-        // =========================================================
-        // ホームに戻る
-        // =========================================================
         function backToHome() {
-            if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-            if (worker) {
-                worker.postMessage({ type: 'stop' });
-                worker.terminate();
-                worker = null;
-            }
-            isRunning = false;
-            isPaused = false;
+            stopAll();
             setupScreen.classList.remove('hidden');
             simScreen.classList.add('hidden');
-            pauseBtn.textContent = '⏸️ 一時停止';
+            document.getElementById('pauseBtn').textContent = '⏸️ 一時停止';
             completeMessage.classList.add('hidden');
+        }
+
+        function stopAll() {
+            isRunning = false;
+            isPaused = false;
+
+            if (tickInterval) {
+                clearInterval(tickInterval);
+                tickInterval = null;
+            }
+            if (rafId) {
+                cancelAnimationFrame(rafId);
+                rafId = null;
+            }
+
+            if (schedulerWorker) {
+                schedulerWorker.postMessage({ type: 'stop' });
+                schedulerWorker.terminate();
+                schedulerWorker = null;
+            }
+            for (const worker of coreWorkers) {
+                worker.terminate();
+            }
+            coreWorkers = [];
+
+            sharedBuffer = null;
+            globalView = null;
+            coreView = null;
+            queueView = null;
         }
 
         // =========================================================
@@ -941,10 +1315,10 @@
         function togglePause() {
             if (!isRunning) return;
             isPaused = !isPaused;
-            pauseBtn.textContent = isPaused ? '▶️ 再開' : '⏸️ 一時停止';
+            document.getElementById('pauseBtn').textContent = isPaused ? '▶️ 再開' : '⏸️ 一時停止';
             
-            if (worker) {
-                worker.postMessage({ type: isPaused ? 'pause' : 'resume' });
+            if (schedulerWorker) {
+                schedulerWorker.postMessage({ type: isPaused ? 'pause' : 'resume' });
             }
         }
 
