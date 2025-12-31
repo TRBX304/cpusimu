@@ -443,7 +443,11 @@
         let head = Atomics.load(globalView, G_QUEUE_HEAD);
         const tail = Atomics.load(globalView, G_QUEUE_TAIL);
 
-        for (let i = 0; i < cores && head < tail; i++) {
+        // 全コアをチェックし、空きコアにタスクを割り当てる
+        for (let i = 0; i < cores; i++) {
+            // キューが空なら終了
+            if (head >= tail) break;
+            
             const coreBase = i * CORE_STRIDE;
             const taskId = coreView[coreBase + C_TASK_ID];
             
@@ -470,10 +474,13 @@
     function assignTasksSJF(cores) {
         if (sjfLength === 0) return;
 
-        let assigned = 0;
         let sjfPtr = 0;
 
-        for (let i = 0; i < cores && sjfPtr < sjfLength; i++) {
+        // 全コアをチェックし、空きコアにタスクを割り当てる
+        for (let i = 0; i < cores; i++) {
+            // キューが空なら終了
+            if (sjfPtr >= sjfLength) break;
+            
             const coreBase = i * CORE_STRIDE;
             const taskId = coreView[coreBase + C_TASK_ID];
             
@@ -491,7 +498,6 @@
                 coreView[coreBase + C_COMPLETED] = 0;
                 
                 sjfPtr++;
-                assigned++;
             }
         }
 
