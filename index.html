@@ -557,10 +557,22 @@
 
                     if (core.timeSpentMs >= effectiveDuration) {
                         tasksCompletedThisFrame++;
+                        
+                        // 【最適化13】タスク完了時はtransitionを無効化して即座に0%へ
+                        // CSS transitionが逆再生されるのを防ぐ
+                        const fill = core.dom.progressFill;
+                        fill.style.transition = 'none';
+                        fill.style.width = '0%';
+                        // 強制リフローで即座に適用
+                        fill.offsetWidth;
+                        // transitionを復元
+                        fill.style.transition = '';
+                        
                         core.currentTask = null;
                         core.timeSpentMs = 0;
                         core.progress = 0;
                         core.load = 0;
+                        core.prevProgress = 0; // キャッシュもリセット
                     }
                 }
             }
